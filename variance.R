@@ -1,6 +1,6 @@
 install.packages("ape")
 library(ape)
-
+library(dplyr)
 # Load libraries ----------------------------------------------------------
 library(getopt)
 library(cluster)
@@ -128,8 +128,12 @@ subset_dist <- as.dist(subset_distmat)
 
 ## Calculating the threshold
 
-# k for testing 期望的k值
-k <- 200
+# k for testing 期望的k值 ？如何决定大多少比较好？
+k <- 200*1.5
+# Make sure k is not larger than the data
+if k >= nrow(dist_matrix){
+  k <- max(optk*1.5, nrow(dist_matrix)*0.8 )
+}
 
 # Set the initial percentage 初始阈值百分比
 threshold_percent <- 80
@@ -138,53 +142,48 @@ threshold_percent <- 80
 final_threshold_percent <- 0
 final_k <- 0
 
-rowname <-rownames(dist_matrix)
+#write.csv(dist_matrix, file = "rowname.csv", row.names = FALSE)
 
-rownames(dist_matrix)<-rowname
-write.csv(dist_matrix, file = "rowname.csv", row.names = FALSE)
-
-print(colnames(dist_matrix))
-print(rownames(dist_matrix))
-
-stop_loop <- FALSE  # 初始化停止循环的变量
+stop_loop <- FALSE  #Initializes the variable that stops the loop 初始化停止循环的变量
 
 while (threshold_percent >= 0 && !stop_loop) {
-  threshold <- quantile(subset_dist, probs = threshold_percent / 100)
+  threshold <- quantile(subset_dist, probs = threshold_percent / 100) #Calculate the threshold value
   
   distmat_thresholded <- distmat
-  distmat_thresholded[distmat < threshold] <- 0
+  distmat_thresholded[distmat < threshold] <- 0 #Sets elements that are less than the threshold to 0
   distmat_threshold_matrix <- as.matrix(distmat_thresholded)
   
-  kmeans_result <- tryCatch({
+  kmeans_result <- tryCatch({ #Catch possible error situations, output error if errors occur and upadate the threshold_percent
     kmeans(distmat_thresholded, centers = k)
   }, error = function(e) {
     cat("Clustering failed with threshold percent:", threshold_percent, "%\n")
     threshold_percent <- threshold_percent - 1
     if (threshold_percent < 0) {
       cat("Threshold Percent reached 0%. Clustering failed.\n")
-      stop_loop <- TRUE  # 设置停止循环的条件为 TRUE
+      stop_loop <- TRUE  # If the threshold_percent is less than 0, a message indicating that the threshold is 0% is displayed. Set stop_loop to TRUE to stop the loop.
     }
     return(NULL)
   })
   
-  if (!is.null(kmeans_result)) {
-    cluster_labels <- kmeans_result$cluster
-    zero_dist_indices <- which(distmat_threshold_matrix == 0)
-    zero_dist_clusters <- cluster_labels[zero_dist_indices]
+  if (!is.null(kmeans_result)) {#If no errors occur
+    cluster_labels <- kmeans_result$cluster #Gets the label vector of the clustering result
+    zero_dist_indices <- which(distmat_threshold_matrix == 0) #The corresponding labels are extracted according to the index zero_dist_indices with a value of 0 in the distance matrix
+    zero_dist_names <- names(cluster_labels[zero_dist_indices])
     merged_clusters <- cluster_labels
-    merged_clusters[zero_dist_clusters] <- max(cluster_labels) + 1
-    non_na_indices <- which(!is.na(zero_dist_clusters))
-    kmeans_result$cluster[zero_dist_indices[non_na_indices]] <- merged_clusters[zero_dist_indices[non_na_indices]]  # 重新分配 cluster_labels
+    merged_clusters[zero_dist_names] <- max(cluster_labels) + 1 #Update the label value in zero_dist_clusters to the maximum label value plus 1 to avoid conflicts with existing clustering labels
+    non_na_indices_names <- zero_dist_names[!is.na(zero_dist_names)] #Get an index that does not contain NA values
+    kmeans_result$cluster[non_na_indices_names] <- merged_clusters[non_na_indices_names]  #Reassign the clustering label 重新分配 cluster_labels
     
-    current_k <- length(unique(kmeans_result$cluster))
+    current_k <- length(unique(kmeans_result$cluster)) # Calculate the number of different tags in the kmeans_result$cluster
     
-    if (current_k >= k) {
+    
+    if (current_k >= 200) {
       cat("Threshold Percent:", threshold_percent, "%\n")
-      cat("k:", current_k, "\n")
-      stop_loop <- TRUE  # 设置停止循环的条件为 TRUE
+      cat("k:", current_k, "\n") #Output the values
+      stop_loop <- TRUE  # Set the stopping condition to TRUE设置停止循环的条件为 TRUE
     } else {
       threshold_percent <- threshold_percent - 1
-      kmeans_result <- NULL  # 重新初始化 kmeans_result
+      kmeans_result <- NULL  # Reinitialize the kmeans result重新初始化 kmeans_result
     }
   }
 }
@@ -193,11 +192,29 @@ if (!stop_loop) {
   cat("Threshold Percent reached 0%. Clustering failed.\n")
 }
 
+#Load the output to a dataframe
+data <- data.frame(data_name= names(kmeans_result$cluster),cluster = kmeans_result$cluster)
+# Groups according to the original discontinuous group label 按照原始的非连续分组标签进行分组
+grouped_data <- data %>% group_by(cluster)
+
+# Add a new contiguous group label and remove the original non-contiguous group label添加一个新的连续的组别标签，并删除原始的非连续分组标签
+new_clusters <- grouped_data %>% 
+  mutate(new_cluster = cur_group_id()) %>% 
+  ungroup() %>% 
+  select(-cluster)
+
+
 # Prepare data for CSV output
 output_data <- data.frame(Sequence = rowname, Cluster = kmeans_result$cluster)
 
 # Write data to CSV file
-write.csv(output_data, file = "output3.csv", row.names = FALSE)
-write.csv(distmat_threshold_matrix, file = "thresholded.csv", row.names = FALSE)
+write.csv(output_data, file = "output4.csv", row.names = FALSE)
+#write.csv(distmat_threshold_matrix, file = "thresholded.csv", row.names = FALSE)
+
+#write.csv(dist_matrix, file = "original dist.csv", row.names = FALSE)
+
+#write.csv(zero_dist_indices, file = "zero_dist_indices.csv", row.names = FALSE)
+#write.csv(zero_dist_clusters, file = "zero_dist_clusters.csv", row.names = FALSE)
+
 
 
